@@ -105,10 +105,20 @@ install with `adb install build/app-debug.apk` or sideload directly.
 ## Build the APK via GitHub Actions
 
 The included `.github/workflows/build-apk.yml` builds a release APK on
-`ubuntu-22.04` by installing Flet CLI directly via pip and running
-`flet build apk`. It also applies a one-line patch to Flet's
-`serious_python` package (adding a trailing slash to `mobilePyPiUrl`)
-which is currently required for the build to complete successfully.
+`ubuntu-22.04`. The pipeline:
+
+1. Installs JDK 17, Python 3.11
+2. Accepts all Android SDK licenses (the runner image ships with most
+   licenses unset, which breaks Gradle)
+3. Wipes the runner's pre-installed NDK (the copy at
+   `/usr/local/lib/android/sdk/ndk/28.2.13676358` is reported by
+   Flutter as a malformed download — deleting it lets Gradle
+   re-download a clean copy automatically)
+4. Installs Flet CLI via pip (`pip install flet flet-cli`)
+5. Pre-fetches Flet's `serious_python` package (expected to fail mid-way)
+6. Patches `serious_python`'s `mobilePyPiUrl` to add a trailing slash
+   (a known Flet bug that breaks the build otherwise)
+7. Runs `flet build apk --verbose --yes`
 
 Triggers:
 
@@ -139,10 +149,10 @@ To trigger a build right now:
    ```
 2. Open the repo's **Actions** tab in your browser.
 3. Select **Build Android APK** → **Run workflow**.
-4. First run takes ~25-40 minutes (Flet downloads Flutter + Android
-   SDK + NDK on the first invocation; subsequent runs are faster).
-   When the run finishes, scroll down to the **Artifacts** section and
-   download `github-auto-committer-apk`.
+4. First run takes ~30-45 minutes (Flet downloads Flutter + Android
+   SDK + a clean NDK on the first invocation; subsequent runs are
+   faster thanks to caching). When the run finishes, scroll down to
+   the **Artifacts** section and download `github-auto-committer-apk`.
 
 ## How a commit actually happens
 

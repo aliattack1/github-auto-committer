@@ -26,7 +26,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout source
@@ -37,6 +37,33 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Accept Android SDK licenses
+        # The ubuntu-22.04 runner ships the Android SDK but not all
+        # licenses are accepted, which breaks Gradle. Accept them all.
+        run: |
+          set -e
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          echo "Android SDK licenses accepted"
+
+      - name: Wipe malformed NDK
+        # The runner image ships a pre-installed NDK at
+        # /usr/local/lib/android/sdk/ndk/28.2.13676358 that Flutter
+        # reports as a malformed download. Deleting it lets the Android
+        # Gradle Plugin re-download a clean copy during assembleRelease.
+        # We wipe ALL NDK versions to be safe — Gradle reinstalls what it needs.
+        run: |
+          set -e
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          if [ -d "$ANDROID_HOME/ndk" ]; then
+            echo "Existing NDK versions:"
+            ls -1 "$ANDROID_HOME/ndk" || true
+            rm -rf "$ANDROID_HOME/ndk"/*
+            echo "NDK directory wiped — Gradle will re-download"
+          else
+            echo "No NDK directory present — nothing to wipe"
+          fi
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
