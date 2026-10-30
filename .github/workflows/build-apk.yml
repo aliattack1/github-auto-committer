@@ -2,8 +2,9 @@ name: Build Android APK
 
 # Triggers:
 #   - Manual dispatch via the Actions UI
-#   - On pushing a git tag like `v1.0.0` (release-style)
+#   - On pushing a git tag like `v1.0.0` (also creates a GitHub Release)
 #   - On push to main/master (so the APK rebuilds as you change code)
+#   - On PRs to main/master
 on:
   workflow_dispatch:
   push:
@@ -17,77 +18,97 @@ on:
       - main
       - master
 
+# Cancel any in-flight run when a new commit lands on the same ref
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-apk:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Build APK
-        id: build
-        uses: flet-dev/flet-build-action@v1
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
-          # Target: Android APK (debug build is fine for sideloading)
-          target: apk
-          # Python that runs the Flet CLI on the runner
-          runner-python-version: "3.12"
-          # Python that gets bundled into the APK itself
-          bundled-python-version: "3.12"
-          # Incrementing build id from GitHub's run counter
-          build-number: ${{ github.run_number }}
-          # Pass --debug for a debug-signed APK that's easy to sideload.
-          # Drop this for a release build (requires signing keys configured).
-          extra-args: "--debug"
+          distribution: temurin
+          java-version: '17'
 
-      - name: Locate built APK
-        id: find_apk
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Flet CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install flet flet-cli
+
+      - name: Show Flet version
+        run: flet --version
+
+      - name: Install project Python deps
+        run: pip install -r requirements.txt
+
+      - name: Pre-fetch serious_python (will fail at pip step — expected)
+        run: flet build apk --verbose --yes || true
+
+      - name: Patch serious_python mobilePyPiUrl (add trailing slash)
         run: |
           set -e
-          # The action's archive-path output is a .tar.gz of the build dir
-          # when archive-output is enabled (default). For APK it actually
-          # outputs the apk + checksum files. We also support the raw
-          # output-path for the case where archive-output was disabled.
-          echo "archive-path = ${{ steps.build.outputs.archive-path }}"
-          echo "output-path  = ${{ steps.build.outputs.output-path }}"
-
-          # Find any .apk under either output location
-          APK_PATH=""
-          for search_dir in "${{ steps.build.outputs.output-path }}" "$(dirname ${{ steps.build.outputs.archive-path }})"; do
-            if [ -d "$search_dir" ]; then
-              APK_PATH=$(find "$search_dir" -name "*.apk" -type f 2>/dev/null | head -1)
-            fi
-            [ -n "$APK_PATH" ] && break
-          done
-
-          # Fallback: search whole repo
-          if [ -z "$APK_PATH" ]; then
-            APK_PATH=$(find . -name "*.apk" -type f 2>/dev/null | head -1)
+          file=$(find "$HOME/.pub-cache" -path "*serious_python-*/bin/package_command.dart" | head -1)
+          if [ -z "$file" ]; then
+            echo "ERROR: serious_python source not found in pub cache"
+            exit 1
           fi
+          echo "Patching $file"
+          sed -i 's|const mobilePyPiUrl = "https://pypi.flet.dev";|const mobilePyPiUrl = "https://pypi.flet.dev/";|' "$file"
+          echo "After patch:"
+          grep -n mobilePyPiUrl "$file"
 
+      - name: Build APK (with patched serious_python)
+        run: flet build apk --verbose --yes
+
+      - name: Locate APK
+        run: |
+          echo "=== APK files ==="
+          find build -name "*.apk" -exec ls -lh {} \;
+          APK_PATH=$(find build -name "*.apk" -type f | head -1)
           if [ -z "$APK_PATH" ]; then
-            echo "No APK found anywhere in the workspace"; exit 1
+            echo "ERROR: no APK found in build/"
+            exit 1
           fi
-          echo "Found APK: $APK_PATH"
+          echo "First APK: $APK_PATH"
           echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+        id: locate
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: github-auto-committer-apk
-          path: ${{ steps.find_apk.outputs.apk_path }}
-          retention-days: 30
+          path: build/flutter/build/app/outputs/apk/release/*.apk
           if-no-files-found: error
+          retention-days: 30
 
       - name: Create GitHub Release (on tags)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.find_apk.outputs.apk_path }}
+          files: build/flutter/build/app/outputs/apk/release/*.apk
           generate_release_notes: true
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Debug — show build tree (on failure)
+        if: failure()
+        run: |
+          echo "=== build/ dirs ==="
+          find build -maxdepth 6 -type d 2>/dev/null | head -40 || true
+          echo "=== all .apk files ==="
+          find . -name "*.apk" 2>/dev/null || true
