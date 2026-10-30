@@ -18,11 +18,29 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
 
+# ---------------------------------------------------------------------------
+# Flet build configuration
+# ---------------------------------------------------------------------------
+# Docs: https://flet.dev/docs/publish/pyproject-toml
+#
+# Notes on keys that trip people up:
+#   * `icon` and `splash` are NOT string paths under [tool.flet].
+#     Flet auto-discovers `assets/icon.png` and `assets/splash.png`.
+#   * To customize splash colors / per-platform enable, use the
+#     [tool.flet.splash] TABLE below — setting `splash = "..."` as a
+#     string under [tool.flet] will crash `flet build` with
+#     `AttributeError: 'str' object has no attribute 'get'`.
+# ---------------------------------------------------------------------------
+
 [tool.flet]
-# Flet build config — applied by `flet build apk`
 org_name = "com.zai"
 product_name = "GitHubAutoCommitter"
 company_name = "Z.ai"
 asset_dir = "assets"
-icon = "assets/icon.png"
-splash = "assets/splash.png"
+
+[tool.flet.splash]
+color = "#0d1117"      # splash background (light theme)
+dark_color = "#0d1117" # splash background (dark theme)
+web = false            # no web splash
+ios = false            # no iOS splash
+android = true         # show splash on Android
