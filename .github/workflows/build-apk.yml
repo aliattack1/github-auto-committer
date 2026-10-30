@@ -19,51 +19,59 @@ on:
 
 jobs:
   build-apk:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - name: Build APK
+        id: build
+        uses: flet-dev/flet-build-action@v1
         with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Install Flet CLI
-        run: |
-          python -m pip install --upgrade pip
-          pip install "flet>=0.23.0"
-
-      - name: Show Flet version
-        run: flet --version
-
-      - name: Install project deps
-        run: |
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-
-      - name: Build Android APK (debug)
-        uses: flet-app/flet-build-action@v1
-        with:
-          command: build apk --debug
-          # The action mounts the repo as the project root and runs
-          # `flet build apk` inside a Docker image that already has
-          # Python, Buildozer, and Android SDK preinstalled.
+          # Target: Android APK (debug build is fine for sideloading)
+          target: apk
+          # Python that runs the Flet CLI on the runner
+          runner-python-version: "3.12"
+          # Python that gets bundled into the APK itself
+          bundled-python-version: "3.12"
+          # Incrementing build id from GitHub's run counter
+          build-number: ${{ github.run_number }}
+          # Pass --debug for a debug-signed APK that's easy to sideload.
+          # Drop this for a release build (requires signing keys configured).
+          extra-args: "--debug"
 
       - name: Locate built APK
         id: find_apk
         run: |
           set -e
-          APK_PATH=$(find build -name "*.apk" -type f | head -1)
+          # The action's archive-path output is a .tar.gz of the build dir
+          # when archive-output is enabled (default). For APK it actually
+          # outputs the apk + checksum files. We also support the raw
+          # output-path for the case where archive-output was disabled.
+          echo "archive-path = ${{ steps.build.outputs.archive-path }}"
+          echo "output-path  = ${{ steps.build.outputs.output-path }}"
+
+          # Find any .apk under either output location
+          APK_PATH=""
+          for search_dir in "${{ steps.build.outputs.output-path }}" "$(dirname ${{ steps.build.outputs.archive-path }})"; do
+            if [ -d "$search_dir" ]; then
+              APK_PATH=$(find "$search_dir" -name "*.apk" -type f 2>/dev/null | head -1)
+            fi
+            [ -n "$APK_PATH" ] && break
+          done
+
+          # Fallback: search whole repo
           if [ -z "$APK_PATH" ]; then
-            echo "No APK found in build/"; exit 1
+            APK_PATH=$(find . -name "*.apk" -type f 2>/dev/null | head -1)
           fi
-          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+
+          if [ -z "$APK_PATH" ]; then
+            echo "No APK found anywhere in the workspace"; exit 1
+          fi
           echo "Found APK: $APK_PATH"
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

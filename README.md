@@ -104,7 +104,9 @@ install with `adb install build/app-debug.apk` or sideload directly.
 
 ## Build the APK via GitHub Actions
 
-The included `.github/workflows/build-apk.yml` builds a debug APK:
+The included `.github/workflows/build-apk.yml` uses the official
+[`flet-dev/flet-build-action`](https://github.com/flet-dev/flet-build-action)
+to build a debug APK:
 
 - On every push to `main` / `master`
 - On every git tag matching `v*` (also creates a GitHub Release)
@@ -114,15 +116,28 @@ The APK is uploaded as a downloadable artifact named
 `github-auto-committer-apk` (30-day retention). On tag pushes, the APK
 is also attached to the auto-created GitHub Release.
 
+> **Note:** The workflow uses `flet-dev/flet-build-action@v1` (the
+> official Flet build action). An earlier version of this workflow
+> mistakenly referenced `flet-app/flet-build-action` which does not
+> exist — if you copied the source before this fix, re-copy the file
+> at `.github/workflows/build-apk.yml`.
+
 To trigger a build right now:
 
-1. Push the source to a new GitHub repo: `git init && git add . &&
-   git commit -m "init: GitHub Auto Committer" && git remote add
-   origin <your-repo-url> && git push -u origin main`
+1. Push the source to a new GitHub repo:
+   ```
+   git init
+   git add .
+   git commit -m "init: GitHub Auto Committer"
+   git remote add origin <your-repo-url>
+   git push -u origin main
+   ```
 2. Open the repo's **Actions** tab in your browser.
 3. Select **Build Android APK** → **Run workflow**.
-4. When the run finishes, scroll down to the **Artifacts** section and
-   download `github-auto-committer-apk`.
+4. When the run finishes (typically ~20-40 minutes for the first run
+   because the action downloads Flutter + Android SDK + NDK), scroll
+   down to the **Artifacts** section and download
+   `github-auto-committer-apk`.
 
 ## How a commit actually happens
 
