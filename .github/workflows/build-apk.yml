@@ -1,0 +1,85 @@
+name: Build Android APK
+
+# Triggers:
+#   - Manual dispatch via the Actions UI
+#   - On pushing a git tag like `v1.0.0` (release-style)
+#   - On push to main/master (so the APK rebuilds as you change code)
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Flet CLI
+        run: |
+          python -m pip install --upgrade pip
+          pip install "flet>=0.23.0"
+
+      - name: Show Flet version
+        run: flet --version
+
+      - name: Install project deps
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+      - name: Build Android APK (debug)
+        uses: flet-app/flet-build-action@v1
+        with:
+          command: build apk --debug
+          # The action mounts the repo as the project root and runs
+          # `flet build apk` inside a Docker image that already has
+          # Python, Buildozer, and Android SDK preinstalled.
+
+      - name: Locate built APK
+        id: find_apk
+        run: |
+          set -e
+          APK_PATH=$(find build -name "*.apk" -type f | head -1)
+          if [ -z "$APK_PATH" ]; then
+            echo "No APK found in build/"; exit 1
+          fi
+          echo "apk_path=$APK_PATH" >> "$GITHUB_OUTPUT"
+          echo "Found APK: $APK_PATH"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-auto-committer-apk
+          path: ${{ steps.find_apk.outputs.apk_path }}
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create GitHub Release (on tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.find_apk.outputs.apk_path }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
