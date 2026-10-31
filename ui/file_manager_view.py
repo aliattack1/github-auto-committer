@@ -81,7 +81,17 @@ class FileManagerView:
 
         self.action_bar = ft.Row(
             controls=[
-                ft.FilledButton("Upload", icon=ft.Icons.UPLOAD_FILE, on_click=self._on_upload_click),
+                # Upload button uses action=ft.PickFiles(...) — same pattern
+                # as the Commit page's zip picker. In Flet 1.0, calling
+                # file_picker.pick_files() synchronously from on_click does
+                # nothing because pick_files() is now async; the action-based
+                # approach is the one that reliably opens the native picker
+                # dialog on Android.
+                ft.FilledButton(
+                    "Upload",
+                    icon=ft.Icons.UPLOAD_FILE,
+                    action=ft.PickFiles(self.file_picker, allow_multiple=False),
+                ),
                 ft.OutlinedButton("New folder", icon=ft.Icons.CREATE_NEW_FOLDER, on_click=self._on_new_folder_click),
                 ft.OutlinedButton("New file", icon=ft.Icons.NOTE_ADD, on_click=self._on_new_file_click),
                 ft.OutlinedButton("Copy from repo", icon=ft.Icons.DRIVE_FILE_MOVE, on_click=self._on_copy_click),
@@ -415,16 +425,21 @@ class FileManagerView:
     # ------------------------------------------------------------------
     # Upload
     # ------------------------------------------------------------------
-    def _on_upload_click(self, _e) -> None:
-        if not self.selected_repo:
-            self._set_status("Pick a repository first.", YELLOW)
-            return
-        self.file_picker.pick_files(allow_multiple=False)
+    # NOTE: _on_upload_click is kept for reference but is no longer wired
+    # to the Upload button. The button now uses action=ft.PickFiles(...)
+    # because Flet 1.0's pick_files() is async and won't open the dialog
+    # when called synchronously from on_click. The prerequisite check
+    # (repo selected?) now lives in _on_file_picked below.
 
     def _on_file_picked(self, e: ft.FilePickerResultEvent) -> None:
         if not e.files:
             return
         if not self.selected_repo:
+            self._set_status(
+                "Picked a file but no repository is selected. Pick a repo first, then tap Upload again.",
+                YELLOW,
+            )
+            self._append_log("upload", "File picked but no repo selected — ignoring.", YELLOW)
             return
         picked = e.files[0]
         local_path = picked.path
