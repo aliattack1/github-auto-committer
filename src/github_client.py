@@ -157,19 +157,12 @@ class GitHubClient:
     # Commit pipeline
     # ------------------------------------------------------------------
     def get_ref(self, owner: str, repo: str, ref: str = "heads/main") -> dict:
-        """Return {'ref': ..., 'object': {'sha': ...}} for the given ref."""
-        try:
-            return self._request("GET", f"/repos/{owner}/{repo}/git/refs/{ref}")
-        except GitHubError as e:
-            # Empty repo (no main branch yet) — fall back to HEAD pointer
-            if e.status == 404:
-                return {
-                    "object": {
-                        "sha": "",
-                        "type": "commit",
-                    }
-                }
-            raise
+        """Return {'ref': ..., 'object': {'sha': ...}} for the given ref.
+
+        Raises ``GitHubError(404)`` if the ref does not exist — the caller
+        is expected to handle that case (e.g. by creating the branch).
+        """
+        return self._request("GET", f"/repos/{owner}/{repo}/git/refs/{ref}")
 
     def get_commit(self, owner: str, repo: str, sha: str) -> dict:
         return self._request("GET", f"/repos/{owner}/{repo}/git/commits/{sha}")
@@ -192,14 +185,18 @@ class GitHubClient:
         owner: str,
         repo: str,
         *,
-        base_tree: str,
+        base_tree: str | None,
         tree_entries: Iterable[dict],
     ) -> str:
-        """Create a tree from a list of {path, mode, type, sha} entries."""
-        payload = {
-            "base_tree": base_tree or "",
-            "tree": list(tree_entries),
-        }
+        """Create a tree from a list of {path, mode, type, sha} entries.
+
+        ``base_tree`` may be ``None`` (or empty string) for the very first
+        commit on an empty repo — in that case the tree is created from
+        scratch with no parent tree.
+        """
+        payload: dict = {"tree": list(tree_entries)}
+        if base_tree:
+            payload["base_tree"] = base_tree
         data = self._request("POST", f"/repos/{owner}/{repo}/git/trees", json=payload)
         return data["sha"]
 
@@ -242,21 +239,43 @@ class GitHubClient:
             json={"ref": f"refs/heads/{ref}", "sha": sha},
         )
 
-    def ensure_branch(self, owner: str, repo: str, branch: str, default_branch: str) -> tuple[str, str]:
+    def ensure_branch(self, owner: str, repo: str, branch: str, default_branch: str) -> tuple[str, str | None]:
         """Return (commit_sha, tree_sha) for the head of ``branch``.
 
-        If the branch does not exist yet, create it from the default branch.
+        - If the branch exists, returns its head commit SHA + tree SHA.
+        - If the branch doesn't exist but the default branch does, creates
+          the branch from the default branch and returns those SHAs.
+        - If the repo is completely empty (no branches at all), returns
+          ``("", None)`` — the caller must create the initial commit
+          with no parents and no base_tree.
+
+        Previously this method had a bug where ``get_ref`` swallowed the
+        404 and returned a fake ``{"object": {"sha": ""}}`` — that made
+        the ``except`` block dead code, so missing branches were never
+        created and downstream calls 404'd with empty-SHAs.
         """
+        # 1. Try the requested branch.
         try:
             ref = self.get_ref(owner, repo, f"heads/{branch}")
             commit_sha = ref["object"]["sha"]
+            commit = self.get_commit(owner, repo, commit_sha)
+            return commit_sha, commit["tree"]["sha"]
         except GitHubError as e:
             if e.status != 404:
                 raise
-            # Branch missing → create from default branch
+
+        # 2. Branch missing — try the default branch.
+        try:
             default_ref = self.get_ref(owner, repo, f"heads/{default_branch}")
             commit_sha = default_ref["object"]["sha"]
-            self.create_ref(owner, repo, ref=branch, sha=commit_sha)
+        except GitHubError as e2:
+            if e2.status == 404:
+                # Repo is completely empty (no commits anywhere).
+                # Signal caller to do an initial commit with no parents.
+                return "", None
+            raise
 
+        # 3. Create the requested branch from the default branch's head.
         commit = self.get_commit(owner, repo, commit_sha)
+        self.create_ref(owner, repo, ref=branch, sha=commit_sha)
         return commit_sha, commit["tree"]["sha"]
