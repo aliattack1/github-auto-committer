@@ -18,7 +18,8 @@ import flet as ft
 
 from src.commit_pipeline import commit_zip_to_repo
 from src.github_client import GitHubClient, GitHubError, RepoInfo
-from src.storage import Credentials, Storage
+from src.storage import Credentials, Storage, diagnose_data_dir
+from src.version import APP_VERSION
 from src.zip_processor import summarize
 from ui.theme import (
     ACCENT, BG_SOFT, BG_SOFTER, FG, FG_MUTED, GREEN, RED, YELLOW, status_color,
@@ -163,6 +164,16 @@ class MainView:
                     weight=ft.FontWeight.BOLD,
                     color=FG,
                 ),
+                ft.Container(
+                    content=ft.Text(
+                        f"v{APP_VERSION}",
+                        size=11,
+                        color=ACCENT,
+                    ),
+                    padding=ft.Padding.symmetric(horizontal=6, vertical=2),
+                    border_radius=4,
+                    bgcolor=BG_SOFTER,
+                ),
                 ft.Container(expand=True),
                 ft.Text(self.creds.username, color=FG_MUTED, size=13),
                 self.sign_out_button,
@@ -263,8 +274,36 @@ class MainView:
         """Call this after the built view is added to the page.
 
         Surfaces an initial status hint so the user knows what to do
-        next, instead of seeing an empty status bar.
+        next, instead of seeing an empty status bar. Also logs the
+        resolved data dir at startup so we can diagnose cache-vs-files
+        path issues on Android.
         """
+        # Diagnostic: log the version + resolved data dir + whether it's
+        # the cache dir (which Android can wipe mid-operation).
+        try:
+            diag = diagnose_data_dir()
+            self._append_log(
+                "init",
+                f"App v{APP_VERSION} — data dir: {diag['chosen']}",
+                ACCENT if not diag["chosen_is_cache"] else YELLOW,
+            )
+            if diag["chosen_is_cache"]:
+                self._append_log(
+                    "init",
+                    "WARNING: data dir is in the CACHE dir — Android may wipe it. "
+                    "If commits fail with FileNotFoundError, the app's files dir "
+                    "isn't writable (possible package-name mismatch).",
+                    RED,
+                )
+            if diag.get("detected_package"):
+                self._append_log(
+                    "init",
+                    f"Detected package: {diag['detected_package']}",
+                    FG_MUTED,
+                )
+        except Exception as e:
+            self._append_log("init", f"Diagnostic failed: {e}", YELLOW)
+
         self._maybe_enable_commit()
 
     # ------------------------------------------------------------------

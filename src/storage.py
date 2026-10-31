@@ -118,30 +118,28 @@ def _resolve_data_dir() -> Path:
     """
     candidates: list[Path] = []
 
-    # 1. Android FIRST — prefer the app's persistent files dir over the
-    #    cache dir. Try the dynamically-detected package name first,
-    #    then a list of static variants as a fallback.
-    if _is_android():
-        detected_pkg = _detect_android_package()
-        android_pkgs: list[str] = []
-        if detected_pkg:
-            android_pkgs.append(detected_pkg)
-        android_pkgs.extend(_PACKAGE_VARIANTS)
+    # 1. Android app-private sandbox — ALWAYS try these, even if
+    #    _is_android() is unsure. On desktop these paths don't exist,
+    #    so _is_writable() returns False and they're skipped. On Android
+    #    the app's files dir is always writable by the app.
+    detected_pkg = _detect_android_package()
+    android_pkgs: list[str] = []
+    if detected_pkg:
+        android_pkgs.append(detected_pkg)
+    android_pkgs.extend(_PACKAGE_VARIANTS)
 
-        for pkg in android_pkgs:
-            # /data/data/<pkg>/files/ — private, persistent, OS-encrypted.
-            # This is the right place for creds + history.
-            candidates.append(Path("/data/data") / pkg / "files" / ".ghcommitter")
-            # /data/user/0/<pkg>/files/ — same path via multi-user symlink
-            candidates.append(Path("/data/user/0") / pkg / "files" / ".ghcommitter")
-            # External storage app-specific dir — also persistent, on SD card
-            candidates.append(
-                Path("/storage/emulated/0/Android/data") / pkg / "files" / ".ghcommitter"
-            )
+    for pkg in android_pkgs:
+        # /data/data/<pkg>/files/ — private, persistent, OS-encrypted.
+        candidates.append(Path("/data/data") / pkg / "files" / ".ghcommitter")
+        # /data/user/0/<pkg>/files/ — same path via multi-user symlink
+        candidates.append(Path("/data/user/0") / pkg / "files" / ".ghcommitter")
+        # External storage app-specific dir — also persistent, on SD card
+        candidates.append(
+            Path("/storage/emulated/0/Android/data") / pkg / "files" / ".ghcommitter"
+        )
 
     # 2. Desktop: $HOME/.ghcommitter. On Android $HOME is the cache dir,
-    #    which we DO NOT want — so only try this on non-Android OR if
-    #    $HOME clearly isn't a cache path.
+    #    which we DO NOT want — so skip $HOME if it looks like a cache path.
     home = os.path.expanduser("~")
     is_cache_path = home and ("/cache" in home or "/tmp" in home)
     if home and home not in ("", "/", "/data", "/root", "/var/empty") and not is_cache_path:
@@ -158,8 +156,8 @@ def _resolve_data_dir() -> Path:
     if xdg and "/cache" not in xdg and "/tmp" not in xdg:
         candidates.append(Path(xdg) / "ghcommitter")
 
-    # 5. Last resort — system temp dir (not persistent, but the app will run).
-    #    On Android this is the cache dir, which is bad but better than nothing.
+    # 5. Last resort — system temp dir. On Android this IS the cache dir
+    #    (bad, but better than nothing — at least the app runs).
     candidates.append(Path(tempfile.gettempdir()) / ".ghcommitter")
 
     for cand in candidates:
@@ -171,6 +169,57 @@ def _resolve_data_dir() -> Path:
     fallback = Path(tempfile.gettempdir()) / ".ghcommitter"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
+
+
+def diagnose_data_dir() -> dict:
+    """Return a diagnostic dict showing which candidate paths were tried.
+
+    Useful for debugging on-device: shows every candidate, whether it
+    was writable, and which one was ultimately chosen.
+    """
+    detected_pkg = _detect_android_package()
+    android_pkgs: list[str] = []
+    if detected_pkg:
+        android_pkgs.append(detected_pkg)
+    android_pkgs.extend(_PACKAGE_VARIANTS)
+
+    candidates: list[Path] = []
+    for pkg in android_pkgs:
+        candidates.append(Path("/data/data") / pkg / "files" / ".ghcommitter")
+        candidates.append(Path("/data/user/0") / pkg / "files" / ".ghcommitter")
+        candidates.append(Path("/storage/emulated/0/Android/data") / pkg / "files" / ".ghcommitter")
+
+    home = os.path.expanduser("~")
+    is_cache_path = home and ("/cache" in home or "/tmp" in home)
+    if home and home not in ("", "/", "/data", "/root", "/var/empty") and not is_cache_path:
+        candidates.append(Path(home) / ".ghcommitter")
+
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg and "/cache" not in xdg and "/tmp" not in xdg:
+        candidates.append(Path(xdg) / "ghcommitter")
+
+    candidates.append(Path(tempfile.gettempdir()) / ".ghcommitter")
+
+    results = []
+    for cand in candidates:
+        writable = _is_writable(cand)
+        exists = cand.exists()
+        results.append({
+            "path": str(cand),
+            "exists": exists,
+            "writable": writable,
+        })
+
+    chosen = _resolve_data_dir()
+    return {
+        "is_android": _is_android(),
+        "detected_package": detected_pkg,
+        "home": home,
+        "is_cache_path": bool(is_cache_path),
+        "candidates": results,
+        "chosen": str(chosen),
+        "chosen_is_cache": "/cache/" in str(chosen) or "/tmp/" in str(chosen),
+    }
 
 
 def get_tmp_dir() -> Path:
