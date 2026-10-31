@@ -54,7 +54,8 @@ def main(page: ft.Page) -> None:
             return
 
         view = MainView(page, creds=creds, on_sign_out=_on_sign_out)
-        view.repo_dropdown.on_change = view.on_repo_change
+        # Flet 1.0: Dropdown uses on_select (not on_change).
+        view.repo_dropdown.on_select = view.on_repo_change
         nav_state["view"] = view
 
         # Build the main view first; it appends its file_picker to overlay.
@@ -77,6 +78,9 @@ def main(page: ft.Page) -> None:
         page.add(content, nav)
         view.load_repos_async()
         page.update()
+        # Surface an initial status hint (e.g. "Pick a zip and select a
+        # repository to enable commit.") so the user knows what to do.
+        view.after_mount()
 
     def _show_history() -> None:
         # Keep nav rail, swap content area
