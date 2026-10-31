@@ -18,7 +18,11 @@ a single commit — automatically, with `.gitignore` rules respected.
 - **Strict `.gitignore` support.** Every `.gitignore` file found inside the
   zip is honored with git's "later-patterns-win" rule. A built-in exclude
   list also drops `node_modules/`, `__pycache__/`, `.venv/`, `build/`,
-  `dist/`, `.git/`, OS junk, IDE configs, etc.
+  `dist/`, `.git/`, OS junk, IDE configs, etc. (Note: `.gitignore`,
+  `.gitattributes`, `.gitmodules` themselves ARE committed — they're
+  project files, not internal state. This matters for self-update: when
+  the app commits its own source to its GitHub repo, the `.gitignore`
+  needs to come along so the next build is correct.)
 - **Single-commit push.** All surviving files are uploaded as blobs and
   folded into one new commit using the `tree → commit → update-ref`
   pipeline. No git binary required — works on stock Android.
@@ -29,6 +33,49 @@ a single commit — automatically, with `.gitignore` rules respected.
 - **GitHub Action included.** `.github/workflows/build-apk.yml` builds a
   debug APK automatically when you push to `main`, on tags `v*`, or via
   manual dispatch.
+- **File Manager page (v2.0+).** A second page accessible from the
+  bottom navigation bar lets you:
+  - Browse any of your repositories and navigate the file/folder tree
+    (with clickable breadcrumb path).
+  - Upload a local file to any path in any repo (creates or updates —
+    SHA-aware so updates work cleanly).
+  - Create a new folder (via a `.gitkeep` file — Git doesn't have empty
+    folders).
+  - Create a new text file with content typed directly in the app.
+  - Copy a file from one repo to another (e.g. copy `assets/icon.png`
+    from repo A to repo B).
+  - Delete a file (with confirmation dialog).
+  - Each operation is its own commit with an editable commit message
+    and a live progress log.
+
+## Self-update: shipping a new version via the app itself
+
+Starting with v2.0, the zip produced by this project is structured so
+that **you can update the app by uploading its own source zip through
+the app's Commit & Push page**, pointed at the app's own GitHub repo:
+
+1. Unzip `github-auto-committer-source.zip` (or get the latest source
+   from your app's GitHub repo).
+2. Re-zip the `github-auto-committer/` directory as a `.zip` (or use
+   the source zip as-is).
+3. In the app's **Commit** tab, pick the zip, select the app's own
+   repo (`aliattack1/github-auto-committer` or wherever you forked it),
+   optionally edit the commit message, then **Commit & Push**.
+4. The included GitHub Action (`.github/workflows/build-apk.yml`)
+   triggers automatically on the push, builds a fresh APK, and
+   uploads it as a workflow artifact named
+   `github-auto-committer-apk`.
+5. Download the new APK from the Actions tab and install it.
+
+For this to work cleanly:
+- Your PAT must have **both `repo` and `workflow`** scopes (because
+  `.github/workflows/build-apk.yml` is one of the files being
+  committed).
+- The `.gitignore`, `.gitattributes`, `.gitmodules` files are now
+  included in commits (they were previously dropped by the built-in
+  exclude list — fixed in v2.0).
+- The `.git/` directory itself is still excluded — only its metadata
+  files come along.
 
 ## Why a Personal Access Token instead of a real password?
 
@@ -40,36 +87,47 @@ explicit. Create one at
 https://github.com/settings/tokens with the following scopes:
 
 - `repo` — push to public and private repos
-- `workflow` — only if you want the app to be able to commit GitHub
-  Actions workflow files (e.g. `.github/workflows/*.yml`)
+- `workflow` — **required** if your zip contains any files under
+  `.github/workflows/` (e.g. `.github/workflows/build-apk.yml`). Without
+  this scope, the `create_tree` API call will fail with a misleading
+  **404 Not Found** — this is a known GitHub API bug where Trees returns
+  404 instead of 403 when the workflow scope is missing and a tree entry
+  touches `.github/workflows/`. (Tracked at
+  [GitHub community discussion #188829](https://github.com/orgs/community/discussions/188829).)
+
+**Recommendation:** always enable BOTH `repo` and `workflow` scopes on
+your PAT to avoid this 404.
 
 ## Project layout
 
 ```
 github-auto-committer/
-├── main.py                       # Flet app entry
+├── main.py                       # Flet app entry, 3-page nav (Commit / History / Files)
 ├── requirements.txt
-├── pyproject.toml                # Flet build config (package id, app name)
+├── pyproject.toml                # Flet build config (package id, app name, version)
 ├── README.md
 ├── .gitignore
 ├── .github/
 │   └── workflows/
 │       └── build-apk.yml         # APK build workflow
 ├── assets/
-│   └── icon.png                  # Replace with your own icon
+│   ├── icon.png                  # App icon (Flet auto-detects)
+│   └── splash.png                # Splash screen
 ├── src/
 │   ├── __init__.py
-│   ├── github_client.py          # GitHub REST API client (auth, repos, commit pipeline)
-│   ├── gitignore_filter.py       # .gitignore matcher (pathspec-based)
+│   ├── github_client.py          # GitHub REST API client (auth, repos, trees, contents, commit pipeline)
+│   ├── gitignore_filter.py       # .gitignore matcher (pathspec-based), .gitignore included in commits
 │   ├── zip_processor.py          # Safe zip extraction + summarize
 │   ├── storage.py                # JSON creds + history, multi-platform path resolver (Android sandbox aware)
-│   └── commit_pipeline.py       # End-to-end orchestrator with progress callbacks
+│   ├── commit_pipeline.py       # End-to-end orchestrator (zip → filter → blobs → tree → commit → ref)
+│   └── file_manager.py          # High-level file ops: list, upload, create folder/file, copy, delete
 └── ui/
     ├── __init__.py
     ├── theme.py                  # Material 3 dark + GitHub purple tokens
-    ├── login_view.py             # Login screen
-    ├── main_view.py              # File picker + repo dropdown + new-repo dialog + progress log
-    └── history_view.py           # In-app commit history
+    ├── login_view.py             # Login screen (username + PAT)
+    ├── main_view.py              # Page 1: Commit (zip picker + repo dropdown + progress log)
+    ├── history_view.py           # Page 2: In-app commit history
+    └── file_manager_view.py     # Page 3: File Manager (browse, upload, create, copy, delete)
 ```
 
 ## Run on desktop (for development)

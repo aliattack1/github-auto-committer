@@ -92,7 +92,10 @@ class LoginView:
         help_text = ft.Text(
             "GitHub requires a Personal Access Token instead of your "
             "account password. Create one at "
-            "https://github.com/settings/tokens (scopes: repo, workflow).",
+            "https://github.com/settings/tokens with BOTH scopes:\n"
+            "  • repo  (push to public & private repos)\n"
+            "  • workflow  (required if your zip contains .github/workflows/ files — "
+            "without this scope, the create_tree call will 404)",
             size=11,
             color=FG_MUTED,
             text_align=ft.TextAlign.CENTER,

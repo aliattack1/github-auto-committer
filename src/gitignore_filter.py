@@ -21,11 +21,10 @@ import pathspec
 # Patterns always excluded, even with no .gitignore present. These mirror
 # what seasoned devs almost always mean to ignore.
 BUILTIN_EXCLUDES: list[str] = [
-    # VCS
+    # VCS internal state only — .gitignore/.gitattributes/.gitmodules are
+    # project files that SHOULD be committed (e.g. so the app can update
+    # its own repo via Commit & Push).
     ".git/",
-    ".gitignore",
-    ".gitattributes",
-    ".gitmodules",
     ".hg/",
     ".svn/",
     # Python
@@ -153,13 +152,13 @@ class GitIgnoreFilter:
 
             # If this dir contains a .gitignore, register it BEFORE deciding
             # on this dir's files (git processes .gitignore when entering
-            # the directory).
+            # the directory). The .gitignore file itself is INCLUDED in the
+            # commit — it's a project file, not something to drop. This
+            # matters for self-update: when the app commits its own source
+            # to its GitHub repo, the .gitignore needs to come along.
             if ".gitignore" in filenames:
                 gi_abs = current_abs / ".gitignore"
                 self._load_gitignore(gi_abs, rel_dir)
-                # Don't commit .gitignore files themselves — they ride along
-                # only if explicitly forced. For now, drop them.
-                filenames = [n for n in filenames if n != ".gitignore"]
 
             # Prune ignored subdirectories in-place so os.walk doesn't
             # descend into them (huge speed win on node_modules etc.).

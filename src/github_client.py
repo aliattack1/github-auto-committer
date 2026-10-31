@@ -279,3 +279,84 @@ class GitHubClient:
         commit = self.get_commit(owner, repo, commit_sha)
         self.create_ref(owner, repo, ref=branch, sha=commit_sha)
         return commit_sha, commit["tree"]["sha"]
+
+    # ------------------------------------------------------------------
+    # Contents API — for the File Manager page
+    # ------------------------------------------------------------------
+    def list_contents(self, owner: str, repo: str, path: str = "", *, ref: str | None = None) -> list[dict]:
+        """List files and subdirectories at ``path`` in the repo.
+
+        Returns a list of dicts with keys: ``name``, ``path``, ``type``
+        (``"file"`` or ``"dir"``), ``size``, ``sha``.
+        """
+        url = f"/repos/{owner}/{repo}/contents/{path}" if path else f"/repos/{owner}/{repo}/contents"
+        params = {}
+        if ref:
+            params["ref"] = ref
+        data = self._request("GET", url, params=params)
+        if isinstance(data, list):
+            return data
+        # Single object returned (path pointed at a file, not a dir)
+        return [data]
+
+    def get_file_content(self, owner: str, repo: str, path: str, *, ref: str | None = None) -> tuple[bytes, dict]:
+        """Fetch a single file's content. Returns (decoded_bytes, metadata)."""
+        url = f"/repos/{owner}/{repo}/contents/{path}"
+        params = {}
+        if ref:
+            params["ref"] = ref
+        data = self._request("GET", url, params=params)
+        if not isinstance(data, dict):
+            raise GitHubError(422, f"Path {path!r} is not a file", {})
+        import base64 as _b64
+        content_b64 = data.get("content", "")
+        encoding = data.get("encoding", "base64")
+        if encoding == "base64":
+            content = _b64.b64decode(content_b64)
+        else:
+            content = content_b64.encode("utf-8")
+        return content, data
+
+    def put_file(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        content: bytes,
+        *,
+        message: str,
+        branch: str | None = None,
+        sha: str | None = None,
+    ) -> dict:
+        """Create or update a single file via the Contents API.
+
+        This performs its own commit (one file per commit — a Contents
+        API limitation). For multi-file commits, use the
+        blob → tree → commit → update_ref pipeline instead.
+        """
+        import base64 as _b64
+        payload: dict = {
+            "message": message,
+            "content": _b64.b64encode(content).decode("ascii"),
+        }
+        if branch:
+            payload["branch"] = branch
+        if sha:
+            payload["sha"] = sha  # required when updating an existing file
+        return self._request("PUT", f"/repos/{owner}/{repo}/contents/{path}", json=payload)
+
+    def delete_file(
+        self,
+        owner: str,
+        repo: str,
+        path: str,
+        *,
+        message: str,
+        sha: str,
+        branch: str | None = None,
+    ) -> dict:
+        """Delete a single file via the Contents API."""
+        payload: dict = {"message": message, "sha": sha}
+        if branch:
+            payload["branch"] = branch
+        return self._request("DELETE", f"/repos/{owner}/{repo}/contents/{path}", json=payload)

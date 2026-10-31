@@ -111,12 +111,39 @@ def commit_zip_to_repo(
 
             # 2. Create tree. For an empty repo, base_tree is None and
             #    the tree is created from scratch (no parent tree).
+            #    Detect entries under .github/workflows/ to pre-warn about
+            #    the missing-workflow-scope issue (GitHub returns 404 here
+            #    instead of 403 when the PAT lacks the `workflow` scope).
+            workflow_entries = [
+                e for e in tree_entries
+                if e["path"].startswith(".github/workflows/")
+                or e["path"] == ".github/workflows"
+            ]
+            if workflow_entries:
+                _log(
+                    "tree",
+                    f"Note: {len(workflow_entries)} file(s) under .github/workflows/ "
+                    f"— PAT needs `workflow` scope or this will 404.",
+                    0.81,
+                )
             _log("tree", f"Creating tree (base_tree={tree_sha_head!r})...", 0.82)
             try:
                 new_tree_sha = client.create_tree(
                     owner, name, base_tree=tree_sha_head, tree_entries=tree_entries
                 )
             except GitHubError as e:
+                if e.status == 404 and workflow_entries:
+                    raise GitHubError(
+                        e.status,
+                        "create_tree returned 404 — this is GitHub's buggy way of "
+                        "saying your PAT is missing the `workflow` scope. "
+                        f"{len(workflow_entries)} file(s) under .github/workflows/ "
+                        f"were detected in this commit. Go to "
+                        f"https://github.com/settings/tokens and create a new PAT "
+                        f"with BOTH `repo` AND `workflow` scopes, then sign out and "
+                        f"sign back in with the new token.",
+                        e.payload,
+                    )
                 raise GitHubError(
                     e.status,
                     f"create_tree failed (base_tree={tree_sha_head!r}, "

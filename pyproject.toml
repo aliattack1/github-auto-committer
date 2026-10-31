@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "github-auto-committer"
-version = "1.0.4"
+version = "2.0.0"
 description = "Android app to commit a project's exported zip to GitHub via the REST API"
 readme = "README.md"
 requires-python = ">=3.10"
