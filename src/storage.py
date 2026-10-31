@@ -30,15 +30,21 @@ CREDS_KEY = "ghcommitter.creds.v1"
 HISTORY_KEY = "ghcommitter.history.v1"
 MAX_HISTORY = 50
 
-# Package name constructed from pyproject.toml:
-#   [tool.flet] org_name = "com.zai"
-#   [project] name = "github-auto-committer"
-# Flet's build template joins them and lowercases / strips hyphens for
-# the Android package id. We try several variants because the exact
-# normalization depends on the Flet/cookiecutter version.
+# Possible Android package ids for this app. Flet's build template
+# joins ``org_name`` + the project name (with hyphens → underscores).
+# In practice the actual package on the user's device has been observed
+# as ``com.flet.github_auto_committer`` (Flet's default org_name when
+# [tool.flet].org_name isn't applied by the build). We list several
+# variants so the static fallback can find the right sandbox even if
+# /proc/self/cmdline detection fails.
 _PACKAGE_VARIANTS = (
+    # Observed in the wild (Flet default org_name = "com.flet"):
+    "com.flet.github_auto_committer",
+    # If [tool.flet].org_name = "com.zai" IS applied:
     "com.zai.githubautocommitter",
     "com.zai.github_auto_committer",
+    # Other plausible normalizations:
+    "com.flet.githubautocommitter",
     "com.zai.githubautocommitter.githubautocommitter",
 )
 
@@ -99,31 +105,22 @@ def _is_writable(p: Path) -> bool:
 def _resolve_data_dir() -> Path:
     """Return a writable, ideally-persistent directory for app data.
 
+    On Android the app's **files** dir is the right place (persistent,
+    not auto-cleaned by the OS). The **cache** dir (which is what
+    ``Path.home()`` and ``tempfile.gettempdir()`` return on Android via
+    serious_python) is NOT safe — Android can wipe it at any time,
+    mid-operation, which caused the ``FileNotFoundError`` bugs on
+    ``history.json`` and on extracted project files.
+
     Tries candidates in order; first one that's writable wins. The
     final fallback is the system temp directory (not persistent across
     app reinstalls but at least the app runs).
     """
     candidates: list[Path] = []
 
-    # 1. $HOME/.ghcommitter — works on desktop. Skip broken Android $HOME.
-    home = os.path.expanduser("~")
-    if home and home not in ("", "/", "/data", "/root", "/var/empty"):
-        candidates.append(Path(home) / ".ghcommitter")
-
-    # 2. macOS Application Support
-    if sys.platform == "darwin":
-        candidates.append(
-            Path(home) / "Library" / "Application Support" / "ghcommitter"
-        )
-
-    # 3. Linux XDG
-    xdg = os.environ.get("XDG_DATA_HOME")
-    if xdg:
-        candidates.append(Path(xdg) / "ghcommitter")
-
-    # 4. Android app-private sandbox. Try the dynamically-detected
-    #    package name first, then a list of static variants as a
-    #    fallback in case /proc/self/cmdline doesn't yield the id.
+    # 1. Android FIRST — prefer the app's persistent files dir over the
+    #    cache dir. Try the dynamically-detected package name first,
+    #    then a list of static variants as a fallback.
     if _is_android():
         detected_pkg = _detect_android_package()
         android_pkgs: list[str] = []
@@ -132,12 +129,37 @@ def _resolve_data_dir() -> Path:
         android_pkgs.extend(_PACKAGE_VARIANTS)
 
         for pkg in android_pkgs:
+            # /data/data/<pkg>/files/ — private, persistent, OS-encrypted.
+            # This is the right place for creds + history.
             candidates.append(Path("/data/data") / pkg / "files" / ".ghcommitter")
+            # /data/user/0/<pkg>/files/ — same path via multi-user symlink
+            candidates.append(Path("/data/user/0") / pkg / "files" / ".ghcommitter")
+            # External storage app-specific dir — also persistent, on SD card
             candidates.append(
                 Path("/storage/emulated/0/Android/data") / pkg / "files" / ".ghcommitter"
             )
 
+    # 2. Desktop: $HOME/.ghcommitter. On Android $HOME is the cache dir,
+    #    which we DO NOT want — so only try this on non-Android OR if
+    #    $HOME clearly isn't a cache path.
+    home = os.path.expanduser("~")
+    is_cache_path = home and ("/cache" in home or "/tmp" in home)
+    if home and home not in ("", "/", "/data", "/root", "/var/empty") and not is_cache_path:
+        candidates.append(Path(home) / ".ghcommitter")
+
+    # 3. macOS Application Support
+    if sys.platform == "darwin" and home and not is_cache_path:
+        candidates.append(
+            Path(home) / "Library" / "Application Support" / "ghcommitter"
+        )
+
+    # 4. Linux XDG
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg and "/cache" not in xdg and "/tmp" not in xdg:
+        candidates.append(Path(xdg) / "ghcommitter")
+
     # 5. Last resort — system temp dir (not persistent, but the app will run).
+    #    On Android this is the cache dir, which is bad but better than nothing.
     candidates.append(Path(tempfile.gettempdir()) / ".ghcommitter")
 
     for cand in candidates:
@@ -149,6 +171,29 @@ def _resolve_data_dir() -> Path:
     fallback = Path(tempfile.gettempdir()) / ".ghcommitter"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
+
+
+def get_tmp_dir() -> Path:
+    """Return a writable directory for temporary file extraction.
+
+    On Android this MUST NOT be the system temp / cache dir — Android
+    can clean up the cache mid-operation, causing FileNotFoundError on
+    files that were just extracted. We use a ``tmp/`` subdirectory
+    inside the persistent data dir instead.
+
+    On desktop we use the system temp dir (which is fine — it's not
+    auto-cleaned mid-operation there).
+    """
+    if _is_android():
+        base = _resolve_data_dir()
+        tmp = base / "tmp"
+        try:
+            tmp.mkdir(parents=True, exist_ok=True)
+            return tmp
+        except (OSError, PermissionError):
+            pass
+    # Desktop fallback
+    return Path(tempfile.gettempdir())
 
 
 @dataclass(slots=True)

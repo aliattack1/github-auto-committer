@@ -82,9 +82,37 @@ import tempfile
 
 
 @contextmanager
-def temp_extract(zip_path: str):
-    """Yield the project root path; cleanup on exit."""
-    tmp = tempfile.mkdtemp(prefix="ghcommitter_")
+def temp_extract(zip_path: str, *, base_dir: str | None = None):
+    """Yield the project root path; cleanup on exit.
+
+    ``base_dir`` controls where the temp extraction dir is created.
+    On Android this MUST be the app's persistent files dir (NOT the
+    cache dir / system temp) — Android can wipe the cache mid-operation,
+    causing FileNotFoundError on files that were just extracted.
+
+    If ``base_dir`` is None, falls back to ``tempfile.gettempdir()``
+    (which on Android is the cache dir — only safe on desktop).
+    """
+    if base_dir is None:
+        # Try to use the persistent tmp dir from storage module.
+        # On Android this resolves to /data/data/<pkg>/files/.ghcommitter/tmp/
+        # which is NOT auto-cleaned by the OS. On desktop it's the
+        # system temp dir, which is fine.
+        try:
+            from .storage import get_tmp_dir
+            base_dir = str(get_tmp_dir())
+        except Exception:
+            base_dir = None  # fall back to system temp
+
+    if base_dir:
+        try:
+            tmp = tempfile.mkdtemp(prefix="ghcommitter_", dir=base_dir)
+        except (OSError, PermissionError):
+            # base_dir not writable — fall back to system temp
+            tmp = tempfile.mkdtemp(prefix="ghcommitter_")
+    else:
+        tmp = tempfile.mkdtemp(prefix="ghcommitter_")
+
     try:
         root = extract_zip(zip_path, tmp)
         yield root

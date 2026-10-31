@@ -2,7 +2,7 @@
 from .commit_pipeline import commit_zip_to_repo, CommitResult
 from .github_client import GitHubClient, GitHubError, RepoInfo
 from .gitignore_filter import filter_files, FilteredFile
-from .storage import Credentials, HistoryEntry, Storage
+from .storage import Credentials, HistoryEntry, Storage, get_tmp_dir
 from .zip_processor import extract_zip, temp_extract
 from .file_manager import (
     RepoEntry,
@@ -26,6 +26,7 @@ __all__ = [
     "Credentials",
     "HistoryEntry",
     "Storage",
+    "get_tmp_dir",
     "extract_zip",
     "temp_extract",
     "RepoEntry",

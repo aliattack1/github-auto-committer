@@ -568,9 +568,17 @@ class MainView:
 def summarize_from_zip(zip_path: str) -> dict:
     """Quick stats for the UI log. Imports lazily to avoid circulars."""
     from src.zip_processor import extract_zip, summarize, cleanup
+    from src.storage import get_tmp_dir
     import tempfile
 
-    tmp = tempfile.mkdtemp(prefix="ghc_summary_")
+    # Use the persistent tmp dir on Android (NOT the cache dir, which
+    # Android can wipe mid-operation).
+    try:
+        base = str(get_tmp_dir())
+        tmp = tempfile.mkdtemp(prefix="ghc_summary_", dir=base)
+    except Exception:
+        tmp = tempfile.mkdtemp(prefix="ghc_summary_")
+
     try:
         root = extract_zip(zip_path, tmp)
         return summarize(root)
