@@ -62,6 +62,7 @@ def commit_zip_to_repo(
 
     _log("init", f"Preparing commit to {repo.full_name}@{target_branch}")
     _log("init", f"Message: {msg}")
+    _log("init", f"Owner: {owner!r}, repo name: {name!r}")
 
     try:
         with temp_extract(zip_path) as project_root:
@@ -72,10 +73,16 @@ def commit_zip_to_repo(
                 raise ValueError("No files survived the .gitignore filter — nothing to commit.")
             _log("filter", f"{len(files)} file(s) will be committed", 0.15)
 
-            # Resolve target branch HEAD + tree SHA (may create branch)
+            # Resolve target branch HEAD + tree SHA (may create branch).
+            # For a completely empty repo, returns ("", None) — we'll do
+            # an initial commit with no parents and no base_tree.
             _log("refs", f"Resolving branch '{target_branch}' on GitHub...", 0.2)
             commit_sha_head, tree_sha_head = client.ensure_branch(owner, name, target_branch, repo.default_branch)
-            _log("refs", f"Head commit: {commit_sha_head[:8]}...", 0.25)
+            if commit_sha_head:
+                _log("refs", f"Head commit: {commit_sha_head[:8]}...", 0.25)
+                _log("refs", f"Base tree: {(tree_sha_head or '')[:8]}...", 0.27)
+            else:
+                _log("refs", "Repo is empty — will create initial commit.", 0.25)
 
             # 1. Upload blobs
             tree_entries = []
@@ -83,7 +90,14 @@ def commit_zip_to_repo(
             for i, f in enumerate(files):
                 with open(f.abs_path_str, "rb") as fh:
                     content = fh.read()
-                sha = client.create_blob(owner, name, content)
+                try:
+                    sha = client.create_blob(owner, name, content)
+                except GitHubError as e:
+                    raise GitHubError(
+                        e.status,
+                        f"create_blob failed for {f.repo_path!r}: {e.message}",
+                        e.payload,
+                    )
                 tree_entries.append(
                     {
                         "path": f.repo_path,
@@ -95,30 +109,69 @@ def commit_zip_to_repo(
                 pct = 0.25 + 0.55 * ((i + 1) / total)
                 _log("blobs", f"Uploaded blob {i + 1}/{total}: {f.repo_path}", pct)
 
-            # 2. Create tree (with base_tree so existing files are preserved)
-            _log("tree", "Creating tree...", 0.82)
-            new_tree_sha = client.create_tree(
-                owner, name, base_tree=tree_sha_head, tree_entries=tree_entries
-            )
+            # 2. Create tree. For an empty repo, base_tree is None and
+            #    the tree is created from scratch (no parent tree).
+            _log("tree", f"Creating tree (base_tree={tree_sha_head!r})...", 0.82)
+            try:
+                new_tree_sha = client.create_tree(
+                    owner, name, base_tree=tree_sha_head, tree_entries=tree_entries
+                )
+            except GitHubError as e:
+                raise GitHubError(
+                    e.status,
+                    f"create_tree failed (base_tree={tree_sha_head!r}, "
+                    f"{len(tree_entries)} entries): {e.message}",
+                    e.payload,
+                )
             _log("tree", f"New tree SHA: {new_tree_sha[:8]}...", 0.88)
 
-            # 3. Create commit
+            # 3. Create commit. For an empty repo, parents is [] (initial commit).
             _log("commit", "Creating commit...", 0.92)
             parents = [commit_sha_head] if commit_sha_head else []
-            new_commit_sha = client.create_commit(
-                owner,
-                name,
-                message=msg,
-                tree_sha=new_tree_sha,
-                parent_shas=parents,
-            )
+            try:
+                new_commit_sha = client.create_commit(
+                    owner,
+                    name,
+                    message=msg,
+                    tree_sha=new_tree_sha,
+                    parent_shas=parents,
+                )
+            except GitHubError as e:
+                raise GitHubError(
+                    e.status,
+                    f"create_commit failed (tree={new_tree_sha[:8]}..., "
+                    f"{len(parents)} parent(s)): {e.message}",
+                    e.payload,
+                )
             _log("commit", f"Commit SHA: {new_commit_sha[:8]}...", 0.95)
 
-            # 4. Update branch ref
-            _log("push", f"Updating ref refs/heads/{target_branch}...", 0.97)
-            client.update_ref(
-                owner, name, ref=target_branch, sha=new_commit_sha, force=False
-            )
+            # 4. Update or create branch ref. For an empty repo the ref
+            #    doesn't exist yet, so we CREATE it. For a non-empty repo
+            #    where the target branch existed, we PATCH it.
+            if commit_sha_head:
+                # Branch existed — update its ref to point at the new commit.
+                _log("push", f"Updating ref refs/heads/{target_branch}...", 0.97)
+                try:
+                    client.update_ref(
+                        owner, name, ref=target_branch, sha=new_commit_sha, force=False
+                    )
+                except GitHubError as e:
+                    raise GitHubError(
+                        e.status,
+                        f"update_ref failed for refs/heads/{target_branch}: {e.message}",
+                        e.payload,
+                    )
+            else:
+                # Empty repo — create the initial branch ref.
+                _log("push", f"Creating initial ref refs/heads/{target_branch}...", 0.97)
+                try:
+                    client.create_ref(owner, name, ref=target_branch, sha=new_commit_sha)
+                except GitHubError as e:
+                    raise GitHubError(
+                        e.status,
+                        f"create_ref failed for refs/heads/{target_branch}: {e.message}",
+                        e.payload,
+                    )
 
             html_url = f"https://github.com/{repo.full_name}/commit/{new_commit_sha}"
             _log("done", f"Pushed {len(files)} file(s).", 1.0)
