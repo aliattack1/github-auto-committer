@@ -109,11 +109,14 @@ class MainView:
             focused_border_color=ACCENT,
             text_size=15,
         )
+        # Commit button is always enabled — _on_commit checks
+        # prerequisites and shows a clear status message if anything
+        # is missing. This is more user-friendly than disabling the
+        # button (and avoids any Flet 1.0 disabled-button-event bugs).
         self.commit_button = ft.FilledButton(
             "Commit & Push",
             icon=ft.Icons.CLOUD_UPLOAD,
             on_click=self._on_commit,
-            disabled=True,
             style=ft.ButtonStyle(
                 bgcolor=ACCENT,
                 color="#ffffff",
@@ -256,6 +259,14 @@ class MainView:
             scroll=ft.ScrollMode.AUTO,
         )
 
+    def after_mount(self) -> None:
+        """Call this after the built view is added to the page.
+
+        Surfaces an initial status hint so the user knows what to do
+        next, instead of seeing an empty status bar.
+        """
+        self._maybe_enable_commit()
+
     # ------------------------------------------------------------------
     @staticmethod
     def _default_message() -> str:
@@ -283,14 +294,20 @@ class MainView:
                 self.repo_dropdown.disabled = False
                 if not repos:
                     self._set_status("No repositories found on your account.", YELLOW)
+                    self._append_log("repos", "No repositories found on your account.", YELLOW)
+                else:
+                    self._append_log("repos", f"Loaded {len(repos)} repo(s) from GitHub.", GREEN)
+                    self._maybe_enable_commit()
             except GitHubError as e:
                 self.repo_dropdown.options = []
                 self.repo_dropdown.disabled = False
                 self._set_status(f"Failed to load repos: {e.message}", RED)
+                self._append_log("repos", f"GitHub error: {e.message}", RED)
             except Exception as e:
                 self.repo_dropdown.options = []
                 self.repo_dropdown.disabled = False
                 self._set_status(f"Network error: {e}", RED)
+                self._append_log("repos", f"Network error: {e}", RED)
             self.page.update()
 
         threading.Thread(target=worker, daemon=True).start()
@@ -421,9 +438,18 @@ class MainView:
     # Commit
     # ------------------------------------------------------------------
     def _maybe_enable_commit(self) -> None:
-        ready = bool(self.zip_path) and self.selected_repo is not None and not self._busy
-        self.commit_button.disabled = not ready
-        self.page.update()
+        # Button is always enabled — this method just updates the status
+        # hint so the user knows what's still missing.
+        if self._busy:
+            return
+        if not self.zip_path and not self.selected_repo:
+            self._set_status("Pick a zip and select a repository to enable commit.", FG_MUTED)
+        elif not self.zip_path:
+            self._set_status("Pick a zip file to enable commit.", FG_MUTED)
+        elif not self.selected_repo:
+            self._set_status("Select a repository (or create a new one) to enable commit.", FG_MUTED)
+        else:
+            self._set_status(f"Ready: {len(self.repos)} repo(s) loaded, zip selected.", GREEN)
 
     def _set_status(self, msg: str, color: str = FG_MUTED) -> None:
         self.status_text.value = msg
@@ -446,13 +472,17 @@ class MainView:
         self.page.update()
 
     def _on_commit(self, _e) -> None:
+        # Immediate feedback so the user knows the tap was registered.
+        self._append_log("tap", "Commit button tapped.", ACCENT)
+
         if self._busy:
+            self._set_status("A commit is already in progress — please wait.", YELLOW)
             return
         if not self.zip_path:
-            self._set_status("Pick a zip first.", YELLOW)
+            self._set_status("Pick a zip file first (step 1).", YELLOW)
             return
         if not self.selected_repo:
-            self._set_status("Pick or create a repository first.", YELLOW)
+            self._set_status("Select or create a repository first (step 2).", YELLOW)
             return
 
         self._busy = True
@@ -517,16 +547,22 @@ class MainView:
         self.on_sign_out()
 
     # ------------------------------------------------------------------
-    # Dropdown change handler (wired by main.py)
+    # Dropdown change handler (wired by main.py via on_select in Flet 1.0+)
     # ------------------------------------------------------------------
     def on_repo_change(self, _e) -> None:
+        # dropdown.value returns the selected Option's key (r.full_name).
         full = self.repo_dropdown.value
+        self._append_log("select", f"Dropdown value: {full!r}", FG_MUTED)
         self.selected_repo = next(
             (r for r in self.repos if r.full_name == full), None
         )
         if self.selected_repo:
             self.branch_field.value = self.selected_repo.default_branch
+            self._append_log("select", f"Selected repo: {self.selected_repo.full_name}", GREEN)
+        else:
+            self._append_log("select", f"No matching repo for value {full!r}", YELLOW)
         self._maybe_enable_commit()
+        self.page.update()
 
 
 def summarize_from_zip(zip_path: str) -> dict:
