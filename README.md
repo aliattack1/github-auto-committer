@@ -7,9 +7,11 @@ a single commit — automatically, with `.gitignore` rules respected.
 ## Features
 
 - **Sign in once, stay signed in.** Credentials (GitHub username + Personal
-  Access Token) are stored on-device in a JSON file under
-  `$HOME/.ghcommitter/` (on Android this resolves to the app's private
-  files sandbox — already OS-encrypted and inaccessible to other apps).
+  Access Token) are stored on-device as a JSON file. The storage path is
+  resolved per-platform: on desktop it's `$HOME/.ghcommitter/`; on Android
+  it's `/data/data/<package>/files/.ghcommitter/` (the app's private sandbox —
+  already OS-encrypted and inaccessible to other apps). The package id is
+  detected at runtime via `/proc/self/cmdline`, with static fallbacks.
 - **Pick an existing repo or create a new one.** On launch the app fetches
   your repo list via the GitHub REST API and shows them in a dropdown. A
   "New repo" button opens a dialog to create a new private/public repo inline.
@@ -60,7 +62,7 @@ github-auto-committer/
 │   ├── github_client.py          # GitHub REST API client (auth, repos, commit pipeline)
 │   ├── gitignore_filter.py       # .gitignore matcher (pathspec-based)
 │   ├── zip_processor.py          # Safe zip extraction + summarize
-│   ├── storage.py                # JSON-file-backed creds + history in $HOME/.ghcommitter
+│   ├── storage.py                # JSON creds + history, multi-platform path resolver (Android sandbox aware)
 │   └── commit_pipeline.py       # End-to-end orchestrator with progress callbacks
 └── ui/
     ├── __init__.py

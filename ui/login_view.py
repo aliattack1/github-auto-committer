@@ -98,6 +98,20 @@ class LoginView:
             text_align=ft.TextAlign.CENTER,
         )
 
+        # Show where creds will be stored on this device (useful when
+        # debugging Android permission issues).
+        try:
+            storage_path = str(self.storage.data_dir)
+        except Exception:
+            storage_path = "(unknown)"
+        storage_info = ft.Text(
+            f"Creds stored at: {storage_path}",
+            size=10,
+            color=FG_MUTED,
+            text_align=ft.TextAlign.CENTER,
+            selectable=True,
+        )
+
         form = ft.Column(
             controls=[
                 self.username_field,
@@ -110,6 +124,7 @@ class LoginView:
                     spacing=10,
                 ),
                 help_text,
+                storage_info,
             ],
             spacing=14,
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
