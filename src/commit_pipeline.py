@@ -73,10 +73,37 @@ def commit_zip_to_repo(
                 raise ValueError("No files survived the .gitignore filter — nothing to commit.")
             _log("filter", f"{len(files)} file(s) will be committed", 0.15)
 
+            # CRITICAL: Read ALL file contents into memory IMMEDIATELY, before
+            # starting any uploads. On Android the cache dir (where temp_extract
+            # extracts to, if the persistent files dir isn't writable) can be
+            # wiped mid-operation by the OS — causing FileNotFoundError when
+            # we try to open() files later during the blob-upload loop.
+            # By reading everything into RAM now, we're immune to cache wipes.
+            _log("cache", f"Reading {len(files)} file(s) into memory...", 0.18)
+            in_memory_files: list[tuple[str, bytes]] = []
+            total_bytes = 0
+            for f in files:
+                try:
+                    with open(f.abs_path_str, "rb") as fh:
+                        content = fh.read()
+                    in_memory_files.append((f.repo_path, content))
+                    total_bytes += len(content)
+                except OSError as e:
+                    raise OSError(
+                        f"Failed to read {f.repo_path!r} from {f.abs_path_str!r}: {e}. "
+                        f"The temp extraction dir may have been wiped mid-scan."
+                    ) from e
+            _log(
+                "cache",
+                f"Cached {len(in_memory_files)} file(s), {total_bytes / 1024:.1f} KB in RAM — "
+                f"immune to cache-dir wipes during upload.",
+                0.2,
+            )
+
             # Resolve target branch HEAD + tree SHA (may create branch).
             # For a completely empty repo, returns ("", None) — we'll do
             # an initial commit with no parents and no base_tree.
-            _log("refs", f"Resolving branch '{target_branch}' on GitHub...", 0.2)
+            _log("refs", f"Resolving branch '{target_branch}' on GitHub...", 0.22)
             commit_sha_head, tree_sha_head = client.ensure_branch(owner, name, target_branch, repo.default_branch)
             if commit_sha_head:
                 _log("refs", f"Head commit: {commit_sha_head[:8]}...", 0.25)
@@ -84,30 +111,33 @@ def commit_zip_to_repo(
             else:
                 _log("refs", "Repo is empty — will create initial commit.", 0.25)
 
-            # 1. Upload blobs
+            # 1. Upload blobs — from the in-memory cache, NOT from disk.
+            #    Even if the temp extraction dir has been wiped by Android
+            #    at this point, the uploads will still succeed.
             tree_entries = []
-            total = len(files)
-            for i, f in enumerate(files):
-                with open(f.abs_path_str, "rb") as fh:
-                    content = fh.read()
+            total = len(in_memory_files)
+            for i, (repo_path, content) in enumerate(in_memory_files):
                 try:
                     sha = client.create_blob(owner, name, content)
                 except GitHubError as e:
                     raise GitHubError(
                         e.status,
-                        f"create_blob failed for {f.repo_path!r}: {e.message}",
+                        f"create_blob failed for {repo_path!r}: {e.message}",
                         e.payload,
                     )
                 tree_entries.append(
                     {
-                        "path": f.repo_path,
+                        "path": repo_path,
                         "mode": "100644",  # regular file
                         "type": "blob",
                         "sha": sha,
                     }
                 )
-                pct = 0.25 + 0.55 * ((i + 1) / total)
-                _log("blobs", f"Uploaded blob {i + 1}/{total}: {f.repo_path}", pct)
+                pct = 0.27 + 0.55 * ((i + 1) / total)
+                _log("blobs", f"Uploaded blob {i + 1}/{total}: {repo_path}", pct)
+
+            # Free the in-memory cache — no longer needed after all blobs are uploaded.
+            in_memory_files.clear()
 
             # 2. Create tree. For an empty repo, base_tree is None and
             #    the tree is created from scratch (no parent tree).

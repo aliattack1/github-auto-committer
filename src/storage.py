@@ -281,6 +281,19 @@ class Storage:
         self._creds_file = self._dir / "creds.json"
         self._history_file = self._dir / "history.json"
 
+    def _ensure_dir(self) -> None:
+        """Re-create the data dir if Android wiped it.
+
+        On Android the cache dir can be cleaned up by the OS at any time.
+        If our ``.ghcommitter/`` dir was inside the cache and got wiped,
+        we need to recreate it before every write — otherwise
+        ``write_text()`` fails with FileNotFoundError.
+        """
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+        except (OSError, PermissionError):
+            pass
+
     # ------------------------------------------------------------------
     # Diagnostics
     # ------------------------------------------------------------------
@@ -293,6 +306,7 @@ class Storage:
     # Credentials
     # ------------------------------------------------------------------
     def save_credentials(self, creds: Credentials) -> None:
+        self._ensure_dir()
         self._creds_file.write_text(json.dumps(creds.to_dict()))
 
     def load_credentials(self) -> Credentials | None:
@@ -323,6 +337,7 @@ class Storage:
             return []
 
     def _save_history_raw(self, items: list[dict]) -> None:
+        self._ensure_dir()
         self._history_file.write_text(json.dumps(items))
 
     def add_history(self, entry: HistoryEntry) -> None:
