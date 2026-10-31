@@ -46,9 +46,12 @@ class MainView:
         self.selected_repo: RepoInfo | None = None
         self._busy = False
 
-        # File picker — must be added to page.controls or assigned to page
+        # File picker — Flet 1.0+ registers FilePicker on page.services
+        # (was page.overlay in 0.x). The button uses action=ft.PickFiles(...)
+        # instead of on_click → file_picker.pick_files() because the
+        # action-based approach is the one that reliably opens the native
+        # file dialog on Android and iOS.
         self.file_picker = ft.FilePicker(on_result=self._on_file_picked)
-        # We attach it during build via page.overlay
 
         # UI elements
         self.zip_label = ft.Text(
@@ -60,7 +63,8 @@ class MainView:
         self.pick_button = ft.OutlinedButton(
             "Pick project zip",
             icon=ft.Icons.UPLOAD_FILE,
-            on_click=lambda _: self.file_picker.pick_files(
+            action=ft.PickFiles(
+                self.file_picker,
                 allowed_extensions=["zip"],
                 allow_multiple=False,
             ),
@@ -141,9 +145,11 @@ class MainView:
 
     # ------------------------------------------------------------------
     def build(self) -> ft.Control:
-        # Attach file picker as overlay so callbacks fire correctly
-        if self.file_picker not in self.page.overlay:
-            self.page.overlay.append(self.file_picker)
+        # Flet 1.0+: FilePicker must be registered on page.services
+        # (was page.overlay in 0.x — using overlay causes "Unknown
+        # control: FilePicker" on Android).
+        if self.file_picker not in self.page.services:
+            self.page.services.append(self.file_picker)
 
         top = ft.Row(
             controls=[
