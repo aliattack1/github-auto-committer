@@ -105,23 +105,41 @@ def _is_writable(p: Path) -> bool:
 def _resolve_data_dir() -> Path:
     """Return a writable, ideally-persistent directory for app data.
 
-    On Android the app's **files** dir is the right place (persistent,
-    not auto-cleaned by the OS). The **cache** dir (which is what
-    ``Path.home()`` and ``tempfile.gettempdir()`` return on Android via
-    serious_python) is NOT safe — Android can wipe it at any time,
-    mid-operation, which caused the ``FileNotFoundError`` bugs on
-    ``history.json`` and on extracted project files.
+    Resolution order:
+      1. ``FLET_APP_STORAGE_DATA`` env var (set by Flet at runtime on
+         Android/iOS/desktop). This is a durable, app-private directory
+         that the OS NEVER deletes — preserved across updates and backed
+         up. This is the correct place for creds + history.
+      2. Desktop ``$HOME/.ghcommitter`` (skipped if $HOME looks like a
+         cache/temp path, which it does on Android via serious_python).
+      3. Guessed Android package paths (``/data/data/<pkg>/files/``).
+      4. System temp dir (last resort — on Android this is the cache dir,
+         which the OS can wipe mid-operation, but better than nothing).
 
-    Tries candidates in order; first one that's writable wins. The
-    final fallback is the system temp directory (not persistent across
-    app reinstalls but at least the app runs).
+    See: https://flet.dev/docs/cookbook/read-and-write-files
     """
-    candidates: list[Path] = []
+    # 1. FLET_APP_STORAGE_DATA — the RIGHT answer on Flet mobile apps.
+    #    Flet sets this to a "data" subdirectory of the app's support
+    #    directory (get_application_support_directory()), which on
+    #    Android maps to Context.getFilesDir() — durable, persistent,
+    #    OS-backed-up. The OS never purges it.
+    flet_data = os.environ.get("FLET_APP_STORAGE_DATA")
+    if flet_data:
+        candidate = Path(flet_data) / ".ghcommitter"
+        if _is_writable(candidate):
+            return candidate
 
-    # 1. Android app-private sandbox — ALWAYS try these, even if
-    #    _is_android() is unsure. On desktop these paths don't exist,
-    #    so _is_writable() returns False and they're skipped. On Android
-    #    the app's files dir is always writable by the app.
+    # 2. Desktop: $HOME/.ghcommitter. On Android $HOME is the cache dir,
+    #    which we DO NOT want — so skip $HOME if it looks like a cache path.
+    home = os.path.expanduser("~")
+    is_cache_path = home and ("/cache" in home or "/tmp" in home)
+    if home and home not in ("", "/", "/data", "/root", "/var/empty") and not is_cache_path:
+        candidate = Path(home) / ".ghcommitter"
+        if _is_writable(candidate):
+            return candidate
+
+    # 3. Guessed Android package paths (fallback if FLET_APP_STORAGE_DATA
+    #    isn't set for some reason).
     detected_pkg = _detect_android_package()
     android_pkgs: list[str] = []
     if detected_pkg:
@@ -129,43 +147,29 @@ def _resolve_data_dir() -> Path:
     android_pkgs.extend(_PACKAGE_VARIANTS)
 
     for pkg in android_pkgs:
-        # /data/data/<pkg>/files/ — private, persistent, OS-encrypted.
-        candidates.append(Path("/data/data") / pkg / "files" / ".ghcommitter")
-        # /data/user/0/<pkg>/files/ — same path via multi-user symlink
-        candidates.append(Path("/data/user/0") / pkg / "files" / ".ghcommitter")
-        # External storage app-specific dir — also persistent, on SD card
-        candidates.append(
-            Path("/storage/emulated/0/Android/data") / pkg / "files" / ".ghcommitter"
-        )
+        for base in ("/data/data", "/data/user/0"):
+            candidate = Path(base) / pkg / "files" / ".ghcommitter"
+            if _is_writable(candidate):
+                return candidate
+        candidate = Path("/storage/emulated/0/Android/data") / pkg / "files" / ".ghcommitter"
+        if _is_writable(candidate):
+            return candidate
 
-    # 2. Desktop: $HOME/.ghcommitter. On Android $HOME is the cache dir,
-    #    which we DO NOT want — so skip $HOME if it looks like a cache path.
-    home = os.path.expanduser("~")
-    is_cache_path = home and ("/cache" in home or "/tmp" in home)
-    if home and home not in ("", "/", "/data", "/root", "/var/empty") and not is_cache_path:
-        candidates.append(Path(home) / ".ghcommitter")
-
-    # 3. macOS Application Support
+    # 4. macOS Application Support
     if sys.platform == "darwin" and home and not is_cache_path:
-        candidates.append(
-            Path(home) / "Library" / "Application Support" / "ghcommitter"
-        )
+        candidate = Path(home) / "Library" / "Application Support" / "ghcommitter"
+        if _is_writable(candidate):
+            return candidate
 
-    # 4. Linux XDG
+    # 5. Linux XDG
     xdg = os.environ.get("XDG_DATA_HOME")
     if xdg and "/cache" not in xdg and "/tmp" not in xdg:
-        candidates.append(Path(xdg) / "ghcommitter")
+        candidate = Path(xdg) / "ghcommitter"
+        if _is_writable(candidate):
+            return candidate
 
-    # 5. Last resort — system temp dir. On Android this IS the cache dir
+    # 6. Last resort — system temp dir. On Android this IS the cache dir
     #    (bad, but better than nothing — at least the app runs).
-    candidates.append(Path(tempfile.gettempdir()) / ".ghcommitter")
-
-    for cand in candidates:
-        if _is_writable(cand):
-            return cand
-
-    # Truly last resort — should never reach here because the temp dir
-    # candidate above is always writable on a sane system.
     fallback = Path(tempfile.gettempdir()) / ".ghcommitter"
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
@@ -178,12 +182,20 @@ def diagnose_data_dir() -> dict:
     was writable, and which one was ultimately chosen.
     """
     detected_pkg = _detect_android_package()
+    flet_data = os.environ.get("FLET_APP_STORAGE_DATA")
+    flet_cache = os.environ.get("FLET_APP_STORAGE_CACHE")
+    flet_temp = os.environ.get("FLET_APP_STORAGE_TEMP")
+
     android_pkgs: list[str] = []
     if detected_pkg:
         android_pkgs.append(detected_pkg)
     android_pkgs.extend(_PACKAGE_VARIANTS)
 
     candidates: list[Path] = []
+    # Flet env var path (highest priority)
+    if flet_data:
+        candidates.append(Path(flet_data) / ".ghcommitter")
+    # Guessed Android package paths
     for pkg in android_pkgs:
         candidates.append(Path("/data/data") / pkg / "files" / ".ghcommitter")
         candidates.append(Path("/data/user/0") / pkg / "files" / ".ghcommitter")
@@ -214,6 +226,9 @@ def diagnose_data_dir() -> dict:
     return {
         "is_android": _is_android(),
         "detected_package": detected_pkg,
+        "flet_app_storage_data": flet_data,
+        "flet_app_storage_cache": flet_cache,
+        "flet_app_storage_temp": flet_temp,
         "home": home,
         "is_cache_path": bool(is_cache_path),
         "candidates": results,
@@ -227,21 +242,32 @@ def get_tmp_dir() -> Path:
 
     On Android this MUST NOT be the system temp / cache dir — Android
     can clean up the cache mid-operation, causing FileNotFoundError on
-    files that were just extracted. We use a ``tmp/`` subdirectory
-    inside the persistent data dir instead.
+    files that were just extracted.
 
-    On desktop we use the system temp dir (which is fine — it's not
-    auto-cleaned mid-operation there).
+    Uses ``FLET_APP_STORAGE_DATA`` (Flet's durable data dir) if set,
+    with a ``tmp/`` subdirectory inside it. Falls back to the resolved
+    data dir, then to the system temp dir on desktop.
     """
-    if _is_android():
-        base = _resolve_data_dir()
-        tmp = base / "tmp"
+    # 1. FLET_APP_STORAGE_DATA/tmp/ — durable, persistent, never wiped.
+    flet_data = os.environ.get("FLET_APP_STORAGE_DATA")
+    if flet_data:
+        tmp = Path(flet_data) / "tmp"
         try:
             tmp.mkdir(parents=True, exist_ok=True)
             return tmp
         except (OSError, PermissionError):
             pass
-    # Desktop fallback
+
+    # 2. Fall back to the resolved data dir's tmp/ subdir.
+    base = _resolve_data_dir()
+    tmp = base / "tmp"
+    try:
+        tmp.mkdir(parents=True, exist_ok=True)
+        return tmp
+    except (OSError, PermissionError):
+        pass
+
+    # 3. Desktop fallback — system temp dir (fine on desktop).
     return Path(tempfile.gettempdir())
 
 

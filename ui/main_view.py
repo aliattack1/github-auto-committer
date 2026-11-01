@@ -278,8 +278,7 @@ class MainView:
         resolved data dir at startup so we can diagnose cache-vs-files
         path issues on Android.
         """
-        # Diagnostic: log the version + resolved data dir + whether it's
-        # the cache dir (which Android can wipe mid-operation).
+        # Diagnostic: log the version + resolved data dir + Flet env vars.
         try:
             diag = diagnose_data_dir()
             self._append_log(
@@ -287,12 +286,25 @@ class MainView:
                 f"App v{APP_VERSION} — data dir: {diag['chosen']}",
                 ACCENT if not diag["chosen_is_cache"] else YELLOW,
             )
+            # Show Flet's storage env vars (the RIGHT way to find the
+            # persistent dir on Android — set by Flet at runtime).
+            if diag.get("flet_app_storage_data"):
+                self._append_log(
+                    "init",
+                    f"FLET_APP_STORAGE_DATA = {diag['flet_app_storage_data']}",
+                    GREEN,
+                )
+            else:
+                self._append_log(
+                    "init",
+                    "FLET_APP_STORAGE_DATA not set (desktop mode or older Flet).",
+                    FG_MUTED,
+                )
             if diag["chosen_is_cache"]:
                 self._append_log(
                     "init",
                     "WARNING: data dir is in the CACHE dir — Android may wipe it. "
-                    "If commits fail with FileNotFoundError, the app's files dir "
-                    "isn't writable (possible package-name mismatch).",
+                    "FLET_APP_STORAGE_DATA env var is not set on this device.",
                     RED,
                 )
             if diag.get("detected_package"):
